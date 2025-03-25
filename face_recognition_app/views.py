@@ -1,3 +1,4 @@
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -10,6 +11,8 @@ from django.core.files.base import ContentFile
 import os
 from .serializers import FaceCompareSerializer
 from .utils.face_utils import load_known_face, compare_with_known_face
+from .utils.frame_utils import gen_frames
+
 
 class FaceCompareView(APIView):
     def post(self, request):
@@ -39,215 +42,17 @@ class FaceCompareView(APIView):
         
         return Response({'similarity_score': similarity})
 
-
 class FaceDetectView(APIView):
     def get(self, request):
         """Stream webcam video with face recognition against known face"""
-        known_encoding = load_known_face()
+        known_encoding = load_known_face("elon.jpg")
         if known_encoding is None:
             return JsonResponse(
                 {'error': 'Known face not found in media/data'},
                 status=status.HTTP_404_NOT_FOUND
             )
-        
+
         return StreamingHttpResponse(
-            self.gen_frames(known_encoding),
+            gen_frames(known_encoding),
             content_type='multipart/x-mixed-replace; boundary=frame'
         )
-    
-    def gen_frames(self, known_encoding):
-        """Generate frames with face recognition"""
-        video_capture = cv2.VideoCapture(0)
-        known_name = "Known Person"
-        
-        if not video_capture.isOpened():
-            yield JsonResponse(
-                {'error': 'Could not open webcam'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-            return
-
-        process_this_frame = True
-        match_detected = False
-        match_start_time = None
-        match_confirmed = False
-        
-        while True:
-            success, frame = video_capture.read()
-            if not success:
-                break
-            
-            # Only process every other frame to save time
-            if process_this_frame and not match_confirmed:
-                # Resize frame for faster processing
-                small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
-                rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
-                
-                # Detect faces
-                face_locations = face_recognition.face_locations(rgb_small_frame)
-                face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
-                
-                face_names = []
-                current_frame_match = False
-                
-                for face_encoding in face_encodings:
-                    matches = face_recognition.compare_faces([known_encoding], face_encoding)
-                    name = "Unknown"
-                    
-                    face_distances = face_recognition.face_distance([known_encoding], face_encoding)
-                    best_match_index = np.argmin(face_distances)
-                    if matches[best_match_index]:
-                        name = known_name
-                        current_frame_match = True
-                    
-                    face_names.append(name)
-                
-                # Handle match detection timing
-                if current_frame_match:
-                    if not match_detected:
-                        match_detected = True
-                        match_start_time = time.time()
-                    else:
-                        # Check if we've had a match for 3 seconds
-                        if time.time() - match_start_time >= 3:
-                            match_confirmed = True
-                else:
-                    match_detected = False
-                    match_start_time = None
-            
-            process_this_frame = not process_this_frame
-            
-            # Draw results
-            for (top, right, bottom, left), name in zip(face_locations, face_names):
-                # Scale back up face locations
-                top *= 4
-                right *= 4
-                bottom *= 4
-                left *= 4
-                
-                # Choose color based on recognition
-                if name == known_name:
-                    box_color = (0, 255, 0)  # Green
-                    text_color = (0, 0, 255)  # Red text
-                else:
-                    box_color = (0, 0, 255)  # Red
-                    text_color = (255, 255, 255)  # White text
-                
-                # Draw rectangle
-                cv2.rectangle(frame, (left, top), (right, bottom), box_color, 2)
-                cv2.rectangle(frame, (left, bottom - 35), (right, bottom), box_color, cv2.FILLED)
-                font = cv2.FONT_HERSHEY_DUPLEX
-                cv2.putText(frame, name, (left + 6, bottom - 6), font, 1.0, text_color, 1)
-            
-            # Add match confirmation message
-            if match_confirmed:
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                cv2.putText(frame, "MATCH CONFIRMED!", (50, 50), font, 1.5, (0, 255, 0), 3, cv2.LINE_AA)
-                cv2.putText(frame, "Redirecting...", (50, 100), font, 1.0, (0, 255, 0), 2, cv2.LINE_AA)
-                
-                # Convert frame to JPEG
-                ret, buffer = cv2.imencode('.jpg', frame)
-                frame = buffer.tobytes()
-                
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-                
-                # After sending the confirmation frame, we can break the loop
-                video_capture.release()
-                return
-            
-            # Convert frame to JPEG
-            ret, buffer = cv2.imencode('.jpg', frame)
-            frame = buffer.tobytes()
-            
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-        
-        video_capture.release()
-    def get(self, request):
-        """Stream webcam video with face recognition against known face"""
-        known_encoding = load_known_face()
-        if known_encoding is None:
-            return JsonResponse(
-                {'error': 'Known face not found in media/data'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        return StreamingHttpResponse(
-            self.gen_frames(known_encoding),
-            content_type='multipart/x-mixed-replace; boundary=frame'
-        )
-    
-    def gen_frames(self, known_encoding):
-        """Generate frames with face recognition"""
-        video_capture = cv2.VideoCapture(0)
-        known_name = "Known Person"
-        
-        if not video_capture.isOpened():
-            yield JsonResponse(
-                {'error': 'Could not open webcam'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-            return
-
-        process_this_frame = True
-        
-        while True:
-            success, frame = video_capture.read()
-            if not success:
-                break
-            
-            # Only process every other frame to save time
-            if process_this_frame:
-                # Resize frame for faster processing
-                small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
-                rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
-                
-                # Detect faces
-                face_locations = face_recognition.face_locations(rgb_small_frame)
-                face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
-                
-                face_names = []
-                for face_encoding in face_encodings:
-                    matches = face_recognition.compare_faces([known_encoding], face_encoding)
-                    name = "Unknown"
-                    
-                    face_distances = face_recognition.face_distance([known_encoding], face_encoding)
-                    best_match_index = np.argmin(face_distances)
-                    if matches[best_match_index]:
-                        name = known_name
-                    
-                    face_names.append(name)
-            
-            process_this_frame = not process_this_frame
-            
-            # Draw results
-            for (top, right, bottom, left), name in zip(face_locations, face_names):
-                # Scale back up face locations
-                top *= 4
-                right *= 4
-                bottom *= 4
-                left *= 4
-                
-                # Choose color based on recognition
-                if name == known_name:
-                    box_color = (0, 255, 0)  # Green
-                    text_color = (0, 0, 255)  # Red text
-                else:
-                    box_color = (0, 0, 255)  # Red
-                    text_color = (255, 255, 255)  # White text
-                
-                # Draw rectangle
-                cv2.rectangle(frame, (left, top), (right, bottom), box_color, 2)
-                cv2.rectangle(frame, (left, bottom - 35), (right, bottom), box_color, cv2.FILLED)
-                font = cv2.FONT_HERSHEY_DUPLEX
-                cv2.putText(frame, name, (left + 6, bottom - 6), font, 1.0, text_color, 1)
-            
-            # Convert frame to JPEG
-            ret, buffer = cv2.imencode('.jpg', frame)
-            frame = buffer.tobytes()
-            
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-        
-        video_capture.release()
