@@ -3,9 +3,9 @@ import numpy as np
 import os
 from django.conf import settings
 
-def load_known_face():
+def load_known_face(targetImage):
     """Load the known face from media/data/known_face.jpg"""
-    known_face_path = os.path.join(settings.MEDIA_ROOT, 'data', '1.jpg')
+    known_face_path = os.path.join(settings.MEDIA_ROOT, 'data', targetImage)
     if os.path.exists(known_face_path):
         known_image = face_recognition.load_image_file(known_face_path)
         encodings = face_recognition.face_encodings(known_image)
@@ -13,9 +13,9 @@ def load_known_face():
             return encodings[0]
     return None
 
-def compare_with_known_face(uploaded_image_path):
+def compare_with_known_face(uploaded_image_path, targetImage):
     """Compare uploaded image with known face"""
-    known_encoding = load_known_face()
+    known_encoding = load_known_face(targetImage)
     if known_encoding is None:
         return None
     
