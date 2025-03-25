@@ -12,6 +12,8 @@ opencv-python = "*"
 face-recognition = "*"
 dlib = "*"
 face-recognition-models = {git = "git+https://github.com/ageitgey/face_recognition_models"}
+deepface = "*"
+tf-keras = "*"
 
 [dev-packages]
 

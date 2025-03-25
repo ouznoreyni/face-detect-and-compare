@@ -10,7 +10,7 @@ from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 import os
 from .serializers import FaceCompareSerializer
-from .utils.face_utils import load_known_face, compare_with_known_face
+from .utils.face_utils import compare_faces_hybrid, load_known_face, compare_with_known_face
 from .utils.frame_utils import gen_frames
 
 
@@ -29,18 +29,29 @@ class FaceCompareView(APIView):
         # Get target image to test
         targetImage = serializer.validated_data['targetImage']
         # Compare with known face
-        similarity = compare_with_known_face(full_path, targetImage)
+        # similarity = compare_with_known_face(full_path, targetImage)
         
-        # Clean up
+        # # Clean up
+        # default_storage.delete(path)
+        
+        # if similarity is None:
+        #     return Response(
+        #         {'error': 'Could not detect faces in one or both images'},
+        #         status=status.HTTP_400_BAD_REQUEST
+        #     )
+        
+        # return Response({'similarity_score': similarity})
+
+        # Compare faces using hybrid method
+        is_match, confidence = compare_faces_hybrid(full_path, targetImage)
+         # # Clean up
         default_storage.delete(path)
-        
-        if similarity is None:
-            return Response(
-                {'error': 'Could not detect faces in one or both images'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        return Response({'similarity_score': similarity})
+        return JsonResponse({
+            "status": "success",
+            "match": is_match,
+            "confidence": confidence,
+            "method": "DeepFace + face_recognition (Hybrid)",
+        })
 
 class FaceDetectView(APIView):
     def get(self, request):
