@@ -1,0 +1,19 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+django = "*"
+djangorestframework = "*"
+pillow = "*"
+numpy = "*"
+opencv-python = "*"
+face-recognition = "*"
+dlib = "*"
+face-recognition-models = {git = "git+https://github.com/ageitgey/face_recognition_models"}
+
+[dev-packages]
+
+[requires]
+python_version = "3.12"
