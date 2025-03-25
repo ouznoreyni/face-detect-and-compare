@@ -1,6 +1,6 @@
 # Face Detection and Comparison
 
-A Django web application that detects and compares faces using computer vision technologies.
+A Django web application that detects and compares faces using python.
 
 ## Features
 
