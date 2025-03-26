@@ -43,7 +43,7 @@ def gen_frames(known_encoding):
             current_frame_match = False
 
             for face_encoding in face_encodings:
-                matches = face_recognition.compare_faces([known_encoding], face_encoding)
+                matches = face_recognition.compare_faces([known_encoding], face_encoding,0.4)
                 name = "Unknown"
 
                 face_distances = face_recognition.face_distance([known_encoding], face_encoding)
