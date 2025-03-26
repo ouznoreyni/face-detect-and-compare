@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Face Detection</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        #videoContainer { position: relative; margin: 20px 0; }
+        #liveVideo { border: 1px solid #ccc; background: #000; }
+        #canvas { position: absolute; top: 0; left: 0; }
+        #results { margin-top: 20px; padding: 10px; border: 1px solid #ddd; min-height: 60px; }
+        .match { color: green; font-weight: bold; }
+        .no-match { color: red; }
+        .scanning { color: blue; }
+        button { padding: 10px 15px; background: #4CAF50; color: white; border: none; cursor: pointer; }
+        button:hover { background: #45a049; }
+        #loading { display: none; margin-top: 10px; }
+        #faceInfo { position: absolute; top: 10px; left: 10px; color: white; background: rgba(0,0,0,0.5); padding: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Face Detection</h1>
+    <div id="videoContainer">
+        <video id="liveVideo" autoplay playsinline width="640" height="480"></video>
+        <canvas id="canvas" width="640" height="480"></canvas>
+        <div id="faceInfo"></div>
+    </div>
+    <button id="startButton">Start Detection</button>
+    <div id="loading">Processing face detection...</div>
+    <div id="results">Status: Ready</div>
+
+    <script>
+        const video = document.getElementById('liveVideo');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const startButton = document.getElementById('startButton');
+        const resultsDiv = document.getElementById('results');
+        const loadingDiv = document.getElementById('loading');
+        const faceInfoDiv = document.getElementById('faceInfo');
+        let stream = null;
+        let processing = false;
+        let detectionInterval = null;
+        const checkInterval = 500; // Check every 500ms
+
+        // Face detection configuration
+        const faceDetectionOptions = {
+            // Adjust these values based on your needs
+            minDetectionConfidence: 0.7,
+            minFaceSize: 100, // Minimum face size in pixels
+            skinToneThreshold: 0.3 // Percentage of skin-like pixels needed
+        };
+
+        // Start video stream
+        startButton.addEventListener('click', async () => {
+            try {
+                if (!stream) {
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            width: { ideal: 640 },
+                            height: { ideal: 480 },
+                            facingMode: 'user'
+                        },
+                        audio: false
+                    });
+                    video.srcObject = stream;
+                    startButton.textContent = 'Stop Detection';
+                    startDetection();
+                } else {
+                    stopDetection();
+                    stream.getTracks().forEach(track => track.stop());
+                    stream = null;
+                    video.srcObject = null;
+                    startButton.textContent = 'Start Detection';
+                    resultsDiv.textContent = 'Status: Stopped';
+                    faceInfoDiv.textContent = '';
+                }
+            } catch (err) {
+                console.error('Error accessing camera:', err);
+                resultsDiv.textContent = 'Error accessing camera: ' + err.message;
+            }
+        });
+
+        function startDetection() {
+            detectionInterval = setInterval(processFrame, checkInterval);
+            resultsDiv.innerHTML = 'Status: <span class="scanning">Scanning for faces...</span>';
+        }
+
+        function stopDetection() {
+            if (detectionInterval) {
+                clearInterval(detectionInterval);
+                detectionInterval = null;
+            }
+        }
+
+        async function processFrame() {
+            // Skip if already processing or no stream
+            if (processing || !stream) return;
+
+            try {
+                processing = true;
+
+                // Draw video frame to canvas
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                // Check for face using our detection method
+                const faceData = await detectFace();
+
+                if (faceData.faceDetected) {
+                    // Show face info on screen
+                    faceInfoDiv.textContent = `Face detected at X:${faceData.x}, Y:${faceData.y}`;
+
+                    // Draw rectangle around face
+                    ctx.strokeStyle = '#00FF00';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(faceData.x, faceData.y, faceData.width, faceData.height);
+
+                    // Only send to backend if we have a good face detection
+                    if (faceData.confidence > 0.7) {
+                        await verifyWithBackend();
+                    }
+                } else {
+                    faceInfoDiv.textContent = 'No face detected';
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                }
+            } catch (err) {
+                console.error('Frame processing error:', err);
+                resultsDiv.textContent = 'Error during processing: ' + err.message;
+            } finally {
+                processing = false;
+            }
+        }
+
+        async function detectFace() {
+            // Get image data from canvas
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = imageData.data;
+
+            // Variables to track potential face
+            let skinPixels = 0;
+            let faceX = 0, faceY = 0, faceWidth = 0, faceHeight = 0;
+            let facePixels = 0;
+
+            // Scan image for skin tones (simplified face detection)
+            for (let y = 0; y < imageData.height; y += 5) { // Skip rows for performance
+                for (let x = 0; x < imageData.width; x += 5) { // Skip columns for performance
+                    const i = (y * imageData.width + x) * 4;
+                    const r = data[i];
+                    const g = data[i + 1];
+                    const b = data[i + 2];
+
+                    // Simple skin tone detection (adjust these values as needed)
+                    if (r > 150 && g > 100 && b > 80 && r > g && r > b) {
+                        skinPixels++;
+
+                        // Track the bounds of skin-tone areas
+                        if (facePixels === 0) {
+                            faceX = x;
+                            faceY = y;
+                        } else {
+                            if (x < faceX) faceX = x;
+                            if (y < faceY) faceY = y;
+                            if (x > faceX + faceWidth) faceWidth = x - faceX;
+                            if (y > faceY + faceHeight) faceHeight = y - faceY;
+                        }
+                        facePixels++;
+                    }
+                }
+            }
+
+            // Calculate confidence based on percentage of skin pixels
+            const totalPixels = (imageData.width * imageData.height) / 25; // Account for our 5px skipping
+            const skinPercentage = skinPixels / totalPixels;
+            const confidence = Math.min(1, skinPercentage / 0.3); // Normalize to 0-1 range
+
+            // Only consider it a face if we meet our thresholds
+            if (skinPercentage > faceDetectionOptions.skinToneThreshold &&
+                faceWidth > faceDetectionOptions.minFaceSize &&
+                faceHeight > faceDetectionOptions.minFaceSize) {
+                return {
+                    faceDetected: true,
+                    x: faceX,
+                    y: faceY,
+                    width: faceWidth,
+                    height: faceHeight,
+                    confidence: confidence
+                };
+            }
+
+            return { faceDetected: false };
+        }
+
+        async function verifyWithBackend() {
+            loadingDiv.style.display = 'block';
+            resultsDiv.innerHTML = 'Status: <span class="scanning">Verifying face...</span>';
+
+            try {
+                // Convert canvas to base64
+                const imageData = canvas.toDataURL('image/jpeg');
+
+                // Send to server for face recognition
+                const response = await fetch('/api/webrtc-match/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken'),
+                    },
+                    body: JSON.stringify({
+                        image: imageData,
+                        targetImage: 'elon.jpg' // Change to your target image
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                if (data.match) {
+                    resultsDiv.innerHTML = `Status: <span class="match">Match found! (${Math.round(data.similarity)}% similarity)</span>`;
+                    // You could redirect or perform other actions here
+                } else {
+                    resultsDiv.innerHTML = 'Status: <span class="no-match">No match found</span>';
+                }
+            } catch (err) {
+                console.error('Verification error:', err);
+                resultsDiv.textContent = 'Error during verification: ' + err.message;
+            } finally {
+                loadingDiv.style.display = 'none';
+            }
+        }
+
+        // Helper function to get CSRF token
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== '') {
+                const cookies = document.cookie.split(';');
+                for (let i = 0; i < cookies.length; i++) {
+                    const cookie = cookies[i].trim();
+                    if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                        break;
+                    }
+                }
+            }
+            return cookieValue;
+        }
+    </script>
+</body>
+</html>
