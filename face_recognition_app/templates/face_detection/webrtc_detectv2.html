@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Face Detection</title>
+    <title>Face Detection with face-api.js</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; }
         #videoContainer { position: relative; margin: 20px 0; }
@@ -15,47 +15,90 @@
         button:hover { background: #45a049; }
         #loading { display: none; margin-top: 10px; }
         #faceInfo { position: absolute; top: 10px; left: 10px; color: white; background: rgba(0,0,0,0.5); padding: 5px; }
-        #capturedImage { margin-top: 20px; max-width: 640px; display: none; }
-        #matchActions { margin-top: 20px; display: none; }
+        #modelLoading { margin-top: 10px; color: blue; }
     </style>
 </head>
 <body>
-    <h1>Face Detection</h1>
+    <h1>Face Detection with face-api.js</h1>
+    <div id="modelLoading">Loading face detection library...</div>
     <div id="videoContainer">
         <video id="liveVideo" autoplay playsinline width="640" height="480"></video>
         <canvas id="canvas" width="640" height="480"></canvas>
         <div id="faceInfo"></div>
     </div>
-    <button id="startButton">Start Detection</button>
+    <button id="startButton" disabled>Start Detection</button>
     <div id="loading">Processing face detection...</div>
-    <div id="results">Status: Ready</div>
-    <div id="matchActions">
-        <button id="resumeButton">Resume Detection</button>
-    </div>
+    <div id="results">Status: Loading face detection library...</div>
+
+    <!-- Load face-api.js from CDN with integrity check -->
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 
     <script>
         const video = document.getElementById('liveVideo');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const startButton = document.getElementById('startButton');
-        const resumeButton = document.getElementById('resumeButton');
         const resultsDiv = document.getElementById('results');
         const loadingDiv = document.getElementById('loading');
         const faceInfoDiv = document.getElementById('faceInfo');
-        const capturedImage = document.getElementById('capturedImage');
-        const matchActionsDiv = document.getElementById('matchActions');
+        const modelLoadingDiv = document.getElementById('modelLoading');
         let stream = null;
         let processing = false;
         let detectionInterval = null;
-        let hasCaptured = false; // Track if we've already captured for this match
-        const checkInterval = 500;
+        const checkInterval = 300; // Check every 300ms
+        let modelsLoaded = false;
 
-        // Face detection configuration
-        const faceDetectionOptions = {
-            minDetectionConfidence: 0.7,
-            minFaceSize: 100,
-            skinToneThreshold: 0.3
+        // Configuration
+        const detectionOptions = {
+            withLandmarks: true,
+            withDescriptors: false,
+            minConfidence: 0.5
         };
+
+        // First check if face-api.js loaded properly
+        function checkFaceAPI() {
+            if (typeof faceapi === 'undefined') {
+                modelLoadingDiv.textContent = "Error: face-api.js failed to load. Please refresh the page.";
+                return false;
+            }
+            return true;
+        }
+
+        // Load face-api.js models
+        async function loadModels() {
+            try {
+                if (!checkFaceAPI()) return;
+
+                modelLoadingDiv.textContent = "Loading face detection models...";
+
+                // Load the models - using the correct paths
+                await faceapi.nets.tinyFaceDetector.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models');
+                await faceapi.nets.faceLandmark68Tiny.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models');
+
+                modelsLoaded = true;
+                modelLoadingDiv.textContent = "Models loaded successfully!";
+                startButton.disabled = false;
+                resultsDiv.textContent = 'Status: Ready';
+            } catch (err) {
+                console.error('Error loading models:', err);
+                modelLoadingDiv.textContent = "Error loading models: " + err.message;
+
+                // Alternative model loading approach
+                try {
+                    modelLoadingDiv.textContent = "Trying alternative model loading...";
+                    await faceapi.loadTinyFaceDetectorModel('https://justadudewhohacks.github.io/face-api.js/models');
+                    await faceapi.loadFaceLandmarkTinyModel('https://justadudewhohacks.github.io/face-api.js/models');
+
+                    modelsLoaded = true;
+                    modelLoadingDiv.textContent = "Models loaded successfully (alternative method)!";
+                    startButton.disabled = false;
+                    resultsDiv.textContent = 'Status: Ready';
+                } catch (err2) {
+                    console.error('Alternative loading failed:', err2);
+                    modelLoadingDiv.textContent = "Failed to load models. Please check your internet connection.";
+                }
+            }
+        }
 
         // Start video stream
         startButton.addEventListener('click', async () => {
@@ -72,9 +115,6 @@
                     video.srcObject = stream;
                     startButton.textContent = 'Stop Detection';
                     startDetection();
-                    // Reset capture state and hide elements when starting new detection
-                    hasCaptured = false;
-                    matchActionsDiv.style.display = 'none';
                 } else {
                     stopDetection();
                     stream.getTracks().forEach(track => track.stop());
@@ -83,21 +123,11 @@
                     startButton.textContent = 'Start Detection';
                     resultsDiv.textContent = 'Status: Stopped';
                     faceInfoDiv.textContent = '';
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
                 }
             } catch (err) {
                 console.error('Error accessing camera:', err);
                 resultsDiv.textContent = 'Error accessing camera: ' + err.message;
-            }
-        });
-
-        // Resume detection after match
-        resumeButton.addEventListener('click', () => {
-            if (stream) {
-                video.play();
-                startDetection();
-                matchActionsDiv.style.display = 'none';
-                hasCaptured = false; // Reset capture state when resuming
-                resultsDiv.innerHTML = 'Status: <span class="scanning">Resuming detection...</span>';
             }
         });
 
@@ -114,25 +144,38 @@
         }
 
         async function processFrame() {
-            if (processing || !stream || hasCaptured) return; // Skip if already captured a match
+            // Skip if already processing or no stream or models not loaded
+            if (processing || !stream || !modelsLoaded) return;
 
             try {
                 processing = true;
+
+                // Draw video frame to canvas
                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                const faceData = await detectFace();
 
-                if (faceData.faceDetected) {
-                    faceInfoDiv.textContent = `Face detected at X:${faceData.x}, Y:${faceData.y}`;
-                    ctx.strokeStyle = '#00FF00';
-                    ctx.lineWidth = 2;
-                    ctx.strokeRect(faceData.x, faceData.y, faceData.width, faceData.height);
+                // Clear previous drawings
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-                    if (faceData.confidence > 0.7) {
+                // Detect faces using face-api.js
+                const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions(detectionOptions))
+                    .withFaceLandmarks(true);
+
+                if (detections.length > 0) {
+                    // Draw detections
+                    faceapi.draw.drawDetections(canvas, detections);
+                    faceapi.draw.drawFaceLandmarks(canvas, detections);
+
+                    // Display face info
+                    const mainFace = detections[0]; // Get the most prominent face
+                    faceInfoDiv.textContent = `Face detected (${Math.round(mainFace.detection.score * 100)}% confidence)`;
+
+                    // Only send to backend if we have a good face detection
+                    if (mainFace.detection.score > 0.7) {
                         await verifyWithBackend();
                     }
                 } else {
                     faceInfoDiv.textContent = 'No face detected';
-                    ctx.clearRect(0, 0, canvas.width, canvas.height);
                 }
             } catch (err) {
                 console.error('Frame processing error:', err);
@@ -142,62 +185,15 @@
             }
         }
 
-        async function detectFace() {
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const data = imageData.data;
-            let skinPixels = 0;
-            let faceX = 0, faceY = 0, faceWidth = 0, faceHeight = 0;
-            let facePixels = 0;
-
-            for (let y = 0; y < imageData.height; y += 5) {
-                for (let x = 0; x < imageData.width; x += 5) {
-                    const i = (y * imageData.width + x) * 4;
-                    const r = data[i];
-                    const g = data[i + 1];
-                    const b = data[i + 2];
-
-                    if (r > 150 && g > 100 && b > 80 && r > g && r > b) {
-                        skinPixels++;
-                        if (facePixels === 0) {
-                            faceX = x;
-                            faceY = y;
-                        } else {
-                            if (x < faceX) faceX = x;
-                            if (y < faceY) faceY = y;
-                            if (x > faceX + faceWidth) faceWidth = x - faceX;
-                            if (y > faceY + faceHeight) faceHeight = y - faceY;
-                        }
-                        facePixels++;
-                    }
-                }
-            }
-
-            const totalPixels = (imageData.width * imageData.height) / 25;
-            const skinPercentage = skinPixels / totalPixels;
-            const confidence = Math.min(1, skinPercentage / 0.3);
-
-            if (skinPercentage > faceDetectionOptions.skinToneThreshold &&
-                faceWidth > faceDetectionOptions.minFaceSize &&
-                faceHeight > faceDetectionOptions.minFaceSize) {
-                return {
-                    faceDetected: true,
-                    x: faceX,
-                    y: faceY,
-                    width: faceWidth,
-                    height: faceHeight,
-                    confidence: confidence
-                };
-            }
-
-            return { faceDetected: false };
-        }
-
         async function verifyWithBackend() {
             loadingDiv.style.display = 'block';
             resultsDiv.innerHTML = 'Status: <span class="scanning">Verifying face...</span>';
 
             try {
+                // Convert canvas to base64
                 const imageData = canvas.toDataURL('image/jpeg');
+
+                // Send to server for face recognition
                 const response = await fetch('/api/webrtc-match/', {
                     method: 'POST',
                     headers: {
@@ -206,7 +202,7 @@
                     },
                     body: JSON.stringify({
                         image: imageData,
-                        targetImage: 'elon.jpg'
+                        targetImage: 'elon.jpg' // Change to your target image
                     })
                 });
 
@@ -221,24 +217,9 @@
                 }
 
                 if (data.match) {
-                    // Only capture if we haven't already
-                    if (!hasCaptured) {
-                        // Pause the video and capture the image
-                        video.pause();
-                        stopDetection();
-
-                        // Show match actions
-                        matchActionsDiv.style.display = 'block';
-
-                        // Mark that we've captured this match
-                        hasCaptured = true;
-                    }
-
-                    // Display similarity (handle NaN case)
-                    //const similarity = isNaN(data.similarity_score) ? 'Unknown' : Math.round(data.similarity_score);
-                    resultsDiv.innerHTML = `Status: <span class="match">Match found!😉</span>`;
+                    resultsDiv.innerHTML = `Status: <span class="match">Match found! (${Math.round(data.similarity)}% similarity)</span>`;
                 } else {
-                    resultsDiv.innerHTML = 'Status: <span class="no-match">No match found😞</span>';
+                    resultsDiv.innerHTML = 'Status: <span class="no-match">No match found</span>';
                 }
             } catch (err) {
                 console.error('Verification error:', err);
@@ -248,6 +229,7 @@
             }
         }
 
+        // Helper function to get CSRF token
         function getCookie(name) {
             let cookieValue = null;
             if (document.cookie && document.cookie !== '') {
@@ -262,6 +244,22 @@
             }
             return cookieValue;
         }
+
+        // Initialize the application after the library loads
+        function initializeApp() {
+            if (checkFaceAPI()) {
+                loadModels();
+            } else {
+                // Try again after a delay
+                setTimeout(initializeApp, 500);
+            }
+        }
+
+        // Start initialization when the page loads
+        window.addEventListener('load', function() {
+            // Wait a moment to ensure face-api.js is loaded
+            setTimeout(initializeApp, 100);
+        });
     </script>
 </body>
 </html>

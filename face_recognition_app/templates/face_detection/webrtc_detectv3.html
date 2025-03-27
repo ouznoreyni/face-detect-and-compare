@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clean Face Capture</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        #videoContainer { margin: 20px 0; }
+        #liveVideo { border: 1px solid #ccc; background: #000; }
+        #results { margin-top: 20px; padding: 10px; border: 1px solid #ddd; min-height: 60px; }
+        .match { color: green; font-weight: bold; }
+        .no-match { color: red; }
+        .scanning { color: blue; }
+        button { padding: 10px 15px; background: #4CAF50; color: white; border: none; cursor: pointer; }
+        button:hover { background: #45a049; }
+        #loading { display: none; margin-top: 10px; }
+        #modelLoading { margin-top: 10px; color: blue; }
+    </style>
+</head>
+<body>
+    <h1>Clean Face Capture</h1>
+    <div id="modelLoading">Loading face detection library...</div>
+    <div id="videoContainer">
+        <video id="liveVideo" autoplay playsinline muted width="640" height="480"></video>
+    </div>
+    <button id="startButton" disabled>Start Detection</button>
+    <div id="loading">Processing face detection...</div>
+    <div id="results">Status: Loading face detection library...</div>
+
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+
+    <script>
+        const video = document.getElementById('liveVideo');
+        const startButton = document.getElementById('startButton');
+        const resultsDiv = document.getElementById('results');
+        const loadingDiv = document.getElementById('loading');
+        const modelLoadingDiv = document.getElementById('modelLoading');
+        let stream = null;
+        let processing = false;
+        let detectionInterval = null;
+        const checkInterval = 300;
+        let modelsLoaded = false;
+
+        // First check if face-api.js loaded properly
+        function checkFaceAPI() {
+            if (typeof faceapi === 'undefined') {
+                modelLoadingDiv.textContent = "Error: face-api.js failed to load. Please refresh the page.";
+                return false;
+            }
+            return true;
+        }
+
+        // Load face-api.js models
+        async function loadModels() {
+            try {
+                if (!checkFaceAPI()) return;
+
+                modelLoadingDiv.textContent = "Loading face detection models...";
+                await faceapi.nets.tinyFaceDetector.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models');
+                modelsLoaded = true;
+                modelLoadingDiv.textContent = "Models loaded successfully!";
+                startButton.disabled = false;
+                resultsDiv.textContent = 'Status: Ready';
+            } catch (err) {
+                console.error('Error loading models:', err);
+                modelLoadingDiv.textContent = "Error loading models: " + err.message;
+            }
+        }
+
+        // Start video stream
+        startButton.addEventListener('click', async () => {
+            try {
+                if (!stream) {
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            width: { ideal: 640 },
+                            height: { ideal: 480 },
+                            facingMode: 'user'
+                        },
+                        audio: false
+                    });
+                    video.srcObject = stream;
+                    startButton.textContent = 'Stop Detection';
+                    startDetection();
+                } else {
+                    stopDetection();
+                    stream.getTracks().forEach(track => track.stop());
+                    stream = null;
+                    video.srcObject = null;
+                    startButton.textContent = 'Start Detection';
+                    resultsDiv.textContent = 'Status: Stopped';
+                }
+            } catch (err) {
+                console.error('Error accessing camera:', err);
+                resultsDiv.textContent = 'Error accessing camera: ' + err.message;
+            }
+        });
+
+        function startDetection() {
+            detectionInterval = setInterval(processFrame, checkInterval);
+            resultsDiv.innerHTML = 'Status: <span class="scanning">Scanning for faces...</span>';
+        }
+
+        function stopDetection() {
+            if (detectionInterval) {
+                clearInterval(detectionInterval);
+                detectionInterval = null;
+            }
+        }
+
+        async function processFrame() {
+            if (processing || !stream || !modelsLoaded) return;
+
+            try {
+                processing = true;
+                const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions());
+
+                if (detections.length > 0 && detections[0].score > 0.7) {
+                    await verifyWithBackend();
+                }
+            } catch (err) {
+                console.error('Frame processing error:', err);
+            } finally {
+                processing = false;
+            }
+        }
+
+        async function verifyWithBackend() {
+            loadingDiv.style.display = 'block';
+            resultsDiv.innerHTML = 'Status: <span class="scanning">Verifying face...</span>';
+
+            try {
+                // Create temporary canvas to capture clean image
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                const imageData = canvas.toDataURL('image/jpeg');
+
+                const response = await fetch('/api/webrtc-match/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken'),
+                    },
+                    body: JSON.stringify({
+                        image: imageData,
+                        targetImage: '2.jpeg' // Your target image
+                    })
+                });
+
+                const data = await response.json();
+                if (data.match) {
+                    resultsDiv.innerHTML = `Status: <span class="match">Match found! (${Math.round(data.similarity)}% similarity)</span>`;
+                } else {
+                    resultsDiv.innerHTML = 'Status: <span class="no-match">No match found</span>';
+                }
+            } catch (err) {
+                console.error('Verification error:', err);
+                resultsDiv.textContent = 'Error during verification: ' + err.message;
+            } finally {
+                loadingDiv.style.display = 'none';
+            }
+        }
+
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie && document.cookie !== '') {
+                const cookies = document.cookie.split(';');
+                for (let i = 0; i < cookies.length; i++) {
+                    const cookie = cookies[i].trim();
+                    if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                        break;
+                    }
+                }
+            }
+            return cookieValue;
+        }
+
+        // Initialize the app
+        window.addEventListener('load', function() {
+            if (checkFaceAPI()) {
+                loadModels();
+            }
+        });
+    </script>
+</body>
+</html>
